@@ -58,7 +58,8 @@ def create_embedder(embedder_spec: CfgNode, embedder_dim: int) -> nn.Module:
         raise ValueError(f"Unexpected embedder type {embedder_type}")
 
     if not embedder_spec.IS_TRAINABLE:
-        embedder.requires_grad_(False)  # pyre-ignore[16]
+        # pyre-fixme[29]: `Union[nn.Module, torch.Tensor]` is not a function.
+        embedder.requires_grad_(False)
 
     return embedder
 
@@ -85,9 +86,8 @@ class Embedder(nn.Module):
         logger = logging.getLogger(__name__)
         for mesh_name, embedder_spec in cfg.MODEL.ROI_DENSEPOSE_HEAD.CSE.EMBEDDERS.items():
             logger.info(f"Adding embedder embedder_{mesh_name} with spec {embedder_spec}")
-            self.add_module(  # pyre-ignore[16]
-                f"embedder_{mesh_name}", create_embedder(embedder_spec, embedder_dim)
-            )
+            # pyre-fixme[29]: `Union[nn.Module, torch.Tensor]` is not a function.
+            self.add_module(f"embedder_{mesh_name}", create_embedder(embedder_spec, embedder_dim))
             self.mesh_names.add(mesh_name)
         if cfg.MODEL.WEIGHTS != "":
             self.load_from_model_checkpoint(cfg.MODEL.WEIGHTS)
@@ -111,7 +111,9 @@ class Embedder(nn.Module):
                         v_key = torch.from_numpy(v_key)
                     state_dict_local[key[len(prefix) :]] = v_key
             # non-strict loading to finetune on different meshes
-            self.load_state_dict(state_dict_local, strict=False)  # pyre-ignore[28]
+            # pyre-fixme[6]: Expected `OrderedDict[typing.Any, typing.Any]` for 1st
+            #  param but got `Dict[typing.Any, typing.Any]`.
+            self.load_state_dict(state_dict_local, strict=False)
 
     def forward(self, mesh_name: str) -> torch.Tensor:
         """

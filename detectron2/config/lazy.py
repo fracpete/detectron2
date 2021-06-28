@@ -126,7 +126,7 @@ def _patch_import():
             # Only deal with relative imports inside config files
             level != 0
             and globals is not None
-            and globals.get("__package__", "").startswith(_CFG_PACKAGE_NAME)
+            and (globals.get("__package__", "") or "").startswith(_CFG_PACKAGE_NAME)
         ):
             cur_file = find_relative_file(globals["__file__"], name, level)
             _validate_py_syntax(cur_file)
@@ -251,7 +251,10 @@ class LazyConfig:
             _visit_dict_config(cfg, _replace_type_by_name)
 
         try:
-            OmegaConf.save(cfg, filename)
+            with PathManager.open(filename, "w") as f:
+                dict = OmegaConf.to_container(cfg, resolve=False)
+                dumped = yaml.dump(dict, default_flow_style=None, allow_unicode=True, width=9999)
+                f.write(dumped)
         except Exception:
             logger.exception("Unable to serialize the config to yaml. Error:")
             new_filename = filename + ".pkl"
@@ -277,6 +280,21 @@ class LazyConfig:
         Returns:
             the cfg object
         """
+
+        def safe_update(cfg, key, value):
+            parts = key.split(".")
+            for idx in range(1, len(parts)):
+                prefix = ".".join(parts[:idx])
+                v = OmegaConf.select(cfg, prefix, default=None)
+                if v is None:
+                    break
+                if not OmegaConf.is_config(v):
+                    raise KeyError(
+                        f"Trying to update key {key}, but {prefix} "
+                        f"is not a config, but has type {type(v)}."
+                    )
+            OmegaConf.update(cfg, key, value, merge=True)
+
         from hydra.core.override_parser.overrides_parser import OverridesParser
 
         parser = OverridesParser.create()
@@ -284,7 +302,69 @@ class LazyConfig:
         for o in overrides:
             key = o.key_or_group
             value = o.value()
-            # TODO seems nice to support this
-            assert not o.is_delete(), "deletion is not a supported override"
-            OmegaConf.update(cfg, key, value, merge=True)
+            if o.is_delete():
+                # TODO support this
+                raise NotImplementedError("deletion is not yet a supported override")
+            safe_update(cfg, key, value)
         return cfg
+
+    @staticmethod
+    def to_py(cfg, prefix: str = "cfg."):
+        """
+        Convert a config object into its equivalent Python code.
+
+        Args:
+            cfg: an omegaconf config object
+            prefix: root name for the resulting code (default: "cfg.")
+
+
+        Returns:
+            str of formatted Python code
+        """
+        import black
+
+        cfg = OmegaConf.to_container(cfg, resolve=True)
+
+        def _to_str(obj, prefix=None, inside_call=False):
+            if prefix is None:
+                prefix = []
+            if isinstance(obj, abc.Mapping) and "_target_" in obj:
+                # Dict representing a function call
+                target = _convert_target_to_string(obj.pop("_target_"))
+                args = []
+                for k, v in sorted(obj.items()):
+                    args.append(f"{k}={_to_str(v, inside_call=True)}")
+                args = ", ".join(args)
+                call = f"{target}({args})"
+                return "".join(prefix) + call
+            elif isinstance(obj, abc.Mapping) and not inside_call:
+                # Dict that is not inside a call is a list of top-level config objects that we
+                # render as one object per line with dot separated prefixes
+                key_list = []
+                for k, v in sorted(obj.items()):
+                    if isinstance(v, abc.Mapping) and "_target_" not in v:
+                        key_list.append(_to_str(v, prefix=prefix + [k + "."]))
+                    else:
+                        key = "".join(prefix) + k
+                        key_list.append(f"{key}={_to_str(v)}")
+                return "\n".join(key_list)
+            elif isinstance(obj, abc.Mapping):
+                # Dict that is inside a call is rendered as a regular dict
+                return (
+                    "{"
+                    + ",".join(
+                        f"{repr(k)}: {_to_str(v, inside_call=inside_call)}"
+                        for k, v in sorted(obj.items())
+                    )
+                    + "}"
+                )
+            elif isinstance(obj, list):
+                return "[" + ",".join(_to_str(x, inside_call=inside_call) for x in obj) + "]"
+            else:
+                return repr(obj)
+
+        py_str = _to_str(cfg, prefix=[prefix])
+        try:
+            return black.format_str(py_str, mode=black.Mode())
+        except black.InvalidInput:
+            return py_str

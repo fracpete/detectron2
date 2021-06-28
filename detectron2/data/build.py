@@ -260,7 +260,9 @@ def build_batch_data_loader(
     dataset, sampler, total_batch_size, *, aspect_ratio_grouping=False, num_workers=0
 ):
     """
-    Build a batched dataloader for training.
+    Build a batched dataloader. The main differences from `torch.utils.data.DataLoader` are:
+    1. support aspect ratio grouping options
+    2. use no "batch collation", because this is common for detection training
 
     Args:
         dataset (torch.utils.data.Dataset): map-style PyTorch dataset. Can be indexed.
@@ -395,8 +397,11 @@ def _test_loader_from_config(cfg, dataset_name, mapper=None):
     Uses the given `dataset_name` argument (instead of the names in cfg), because the
     standard practice is to evaluate each test set individually (not combining them).
     """
+    if isinstance(dataset_name, str):
+        dataset_name = [dataset_name]
+
     dataset = get_detection_dataset_dicts(
-        [dataset_name],
+        dataset_name,
         filter_empty=False,
         proposal_files=[
             cfg.DATASETS.PROPOSAL_FILES_TEST[list(cfg.DATASETS.TEST).index(dataset_name)]
